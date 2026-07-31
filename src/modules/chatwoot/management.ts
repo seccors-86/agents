@@ -622,6 +622,7 @@ export interface InboxDto {
   channelType: string | null;
   provider: string | null;
   agentId: string | null;
+  testAgentIds: string[];
 }
 
 const INBOX_SELECT = {
@@ -632,6 +633,10 @@ const INBOX_SELECT = {
   channelType: true,
   provider: true,
   agentId: true,
+  testAgents: {
+    orderBy: { id: "asc" as const },
+    select: { agentId: true },
+  },
 } as const;
 
 function toInboxDto(r: {
@@ -642,6 +647,7 @@ function toInboxDto(r: {
   channelType: string | null;
   provider: string | null;
   agentId: bigint | null;
+  testAgents: { agentId: bigint }[];
 }): InboxDto {
   return {
     id: String(r.id),
@@ -651,6 +657,7 @@ function toInboxDto(r: {
     channelType: r.channelType,
     provider: r.provider,
     agentId: r.agentId === null ? null : String(r.agentId),
+    testAgentIds: r.testAgents.map((x) => String(x.agentId)),
   };
 }
 
@@ -1036,42 +1043,48 @@ export async function bindInbox(
 
   // 1. Scoped reads: the inbox (+ its Chatwoot coordinates and current binding) and, when
   //    connecting, the target agent (validated + its name, which becomes the bot's display name).
-  const { inbox, agentName } = await runScopedOn(base, ctx, async (db) => {
-    const row = await db.inbox.findUnique({
-      where: { id: inboxId },
-      select: {
-        id: true,
-        chatwootInstanceId: true,
-        chatwootInboxId: true,
-        agentId: true,
-        instance: { select: { disconnectedAt: true } },
-      },
-    });
-    if (!row) {
-      throw new NotFoundError("inbox not found", "errors.inboxNotFound");
-    }
-    // Binding to a disconnected account would provision a bot on an account we no longer handle.
-    // Reject it (the account must be reconnected first); unbinding (agentId null) stays allowed.
-    if (agentId !== null && row.instance.disconnectedAt !== null) {
-      throw new AppError(
-        "this account is disconnected; reconnect it before assigning an agent",
-        409,
-        "errors.chatwootAccountDisconnected",
-      );
-    }
-    let name = "";
-    if (agentId !== null) {
-      const agent = await db.agent.findUnique({
-        where: { id: agentId },
-        select: { name: true },
+  const { inbox, agentName, agentMode } = await runScopedOn(
+    base,
+    ctx,
+    async (db) => {
+      const row = await db.inbox.findUnique({
+        where: { id: inboxId },
+        select: {
+          id: true,
+          chatwootInstanceId: true,
+          chatwootInboxId: true,
+          agentId: true,
+          instance: { select: { disconnectedAt: true } },
+        },
       });
-      if (!agent) {
-        throw new NotFoundError("agent not found", "errors.agentNotFound");
+      if (!row) {
+        throw new NotFoundError("inbox not found", "errors.inboxNotFound");
       }
-      name = agent.name;
-    }
-    return { inbox: row, agentName: name };
-  });
+      // Binding to a disconnected account would provision a bot on an account we no longer handle.
+      // Reject it (the account must be reconnected first); unbinding (agentId null) stays allowed.
+      if (agentId !== null && row.instance.disconnectedAt !== null) {
+        throw new AppError(
+          "this account is disconnected; reconnect it before assigning an agent",
+          409,
+          "errors.chatwootAccountDisconnected",
+        );
+      }
+      let name = "";
+      let mode: string | null = null;
+      if (agentId !== null) {
+        const agent = await db.agent.findUnique({
+          where: { id: agentId },
+          select: { name: true, mode: true },
+        });
+        if (!agent) {
+          throw new NotFoundError("agent not found", "errors.agentNotFound");
+        }
+        name = agent.name;
+        mode = agent.mode;
+      }
+      return { inbox: row, agentName: name, agentMode: mode };
+    },
+  );
 
   // 2. Sync the Chatwoot side OUTSIDE any tx (only when the connection actually changes). A
   //    Chatwoot/network failure surfaces as a uniform 502 (ChatwootApiError carries PII-free status
@@ -1117,6 +1130,135 @@ export async function bindInbox(
   // 3. Persist the binding (scoped, no network).
   return runScopedOn(base, ctx, async (db) => {
     await db.inbox.update({ where: { id: inboxId }, data: { agentId } });
+    // A production or unbound inbox has exactly one effective agent. Any additional test grants and
+    // per-conversation selections are removed atomically when leaving test mode.
+    if (agentId === null || agentMode !== "test") {
+      await db.inboxTestAgent.deleteMany({ where: { inboxId } });
+      await db.conversation.updateMany({
+        where: { inboxId },
+        data: { testAgentId: null, testActivatedAt: null },
+      });
+    }
+    const row = await db.inbox.findUniqueOrThrow({
+      where: { id: inboxId },
+      select: INBOX_SELECT,
+    });
+    return toInboxDto(row);
+  });
+}
+
+// Replaces the additional TEST personas available on an inbox. The primary Inbox.agentId remains
+// the only Chatwoot-connected bot; additional persona bots are provisioned so their own token can
+// post attributed replies after a conversation selects them with `/teste <nome>`.
+export async function setInboxTestAgents(
+  ctx: TenantContext,
+  inboxId: bigint,
+  requestedAgentIds: bigint[],
+  deps: LoadChatwootClientDeps = {},
+  base: PrismaClient = basePrisma,
+): Promise<InboxDto> {
+  if (ctx.tenantId === null) throw new AppError("tenant required", 400);
+  const tenantId = ctx.tenantId;
+  const agentIds = [...new Set(requestedAgentIds.map(String))].map(BigInt);
+
+  const target = await runScopedOn(base, ctx, async (db) => {
+    const inbox = await db.inbox.findUnique({
+      where: { id: inboxId },
+      select: {
+        id: true,
+        chatwootInstanceId: true,
+        agentId: true,
+        instance: { select: { disconnectedAt: true } },
+      },
+    });
+    if (!inbox) {
+      throw new NotFoundError("inbox not found", "errors.inboxNotFound");
+    }
+    if (inbox.instance.disconnectedAt !== null) {
+      throw new AppError(
+        "this account is disconnected; reconnect it before assigning test agents",
+        409,
+        "errors.chatwootAccountDisconnected",
+      );
+    }
+    if (inbox.agentId === null) {
+      throw new AppError(
+        "bind a primary test agent before adding test agents",
+        409,
+        "errors.inboxPrimaryAgentRequired",
+      );
+    }
+    const primary = await db.agent.findUnique({
+      where: { id: inbox.agentId },
+      select: { mode: true },
+    });
+    if (primary?.mode !== "test") {
+      throw new AppError(
+        "additional agents are only allowed while the primary agent is in test mode",
+        409,
+        "errors.inboxTestAgentsRequireTestMode",
+      );
+    }
+    if (agentIds.some((id) => id === inbox.agentId)) {
+      throw new AppError(
+        "the primary agent must not be repeated as an additional test agent",
+        400,
+        "errors.inboxDuplicatePrimaryAgent",
+      );
+    }
+    const agents =
+      agentIds.length === 0
+        ? []
+        : await db.agent.findMany({
+            where: { id: { in: agentIds } },
+            select: { id: true, name: true, mode: true, enabled: true },
+          });
+    if (agents.length !== agentIds.length) {
+      throw new NotFoundError("agent not found", "errors.agentNotFound");
+    }
+    if (agents.some((a) => a.mode !== "test" || !a.enabled)) {
+      throw new AppError(
+        "additional agents must be enabled and in test mode",
+        409,
+        "errors.inboxAdditionalAgentMustBeTest",
+      );
+    }
+    return { inbox, agents };
+  });
+
+  if (target.agents.length > 0) {
+    const client = await loadChatwootClient(
+      tenantId,
+      target.inbox.chatwootInstanceId,
+      { base, makeClient: deps.makeClient },
+    );
+    for (const agent of target.agents) {
+      await ensureAgentBot(
+        tenantId,
+        target.inbox.chatwootInstanceId,
+        agent.id,
+        agent.name,
+        client,
+        { base },
+      );
+    }
+  }
+
+  return runScopedOn(base, ctx, async (db) => {
+    await db.inboxTestAgent.deleteMany({ where: { inboxId } });
+    if (agentIds.length > 0) {
+      await db.inboxTestAgent.createMany({
+        data: agentIds.map((agentId) => ({ tenantId, inboxId, agentId })),
+      });
+    }
+    // A removed persona cannot remain selected on a conversation.
+    await db.conversation.updateMany({
+      where:
+        agentIds.length === 0
+          ? { inboxId, testAgentId: { not: null } }
+          : { inboxId, testAgentId: { notIn: agentIds } },
+      data: { testAgentId: null, testActivatedAt: null },
+    });
     const row = await db.inbox.findUniqueOrThrow({
       where: { id: inboxId },
       select: INBOX_SELECT,

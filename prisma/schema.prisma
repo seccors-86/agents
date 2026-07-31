@@ -110,6 +110,7 @@ model Tenant {
   chatwootAgentBots             ChatwootAgentBot[]
   chatwootWebhookDeliveries     ChatwootWebhookDelivery[]
   inboxes                       Inbox[]
+  inboxTestAgents               InboxTestAgent[]
   contacts                      Contact[]
   conversations                 Conversation[]
   agentThreads                  AgentThread[]
@@ -358,10 +359,32 @@ model Inbox {
   tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   instance      ChatwootInstance @relation(fields: [chatwootInstanceId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  testAgents    InboxTestAgent[]
 
   @@unique([tenantId, chatwootInstanceId, chatwootInboxId])
   @@index([tenantId])
   @@map("inboxes")
+}
+
+// Additional TEST-mode personas available on one inbox. Chatwoot still connects exactly one
+// physical Agent Bot (Inbox.agentId); that bot receives the webhook, while the runtime may route an
+// activated test conversation to one of these personas. Production keeps the existing one-agent
+// binding invariant: these rows are considered only while the primary inbox agent is in test mode.
+model InboxTestAgent {
+  id        BigInt   @id @default(autoincrement())
+  tenantId  BigInt   @map("tenant_id")
+  inboxId   BigInt   @map("inbox_id")
+  agentId   BigInt   @map("agent_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inbox  Inbox  @relation(fields: [inboxId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, inboxId, agentId])
+  @@index([tenantId])
+  @@index([agentId])
+  @@map("inbox_test_agents")
 }
 
 model Contact {
@@ -428,6 +451,10 @@ model Conversation {
   // not activated; a "test" agent stays silent until this is set. /reset deliberately does NOT clear
   // it (the conversation keeps answering after a reset).
   testActivatedAt        DateTime? @map("test_activated_at")
+  // Persona selected for this test conversation. NULL means the inbox's primary Agent. It is only
+  // honored when testActivatedAt is set and the selected persona is still granted through
+  // InboxTestAgent; production routing always uses Inbox.agentId.
+  testAgentId            BigInt?   @map("test_agent_id")
   // When the one-shot "this agent is in test mode, send /teste to activate" private note was posted
   // to a silenced conversation. Anti-spam: posted at most once per conversation (NULL = not yet).
   // /reset clears it so a fresh note can be posted on the next silenced message.
@@ -452,14 +479,16 @@ model Conversation {
   createdAt              DateTime  @default(now()) @map("created_at")
   updatedAt              DateTime  @updatedAt @map("updated_at")
 
-  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  instance ChatwootInstance @relation(fields: [chatwootInstanceId], references: [id], onDelete: Cascade)
-  inbox    Inbox?           @relation(fields: [inboxId], references: [id], onDelete: SetNull)
-  contact  Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  instance  ChatwootInstance @relation(fields: [chatwootInstanceId], references: [id], onDelete: Cascade)
+  inbox     Inbox?           @relation(fields: [inboxId], references: [id], onDelete: SetNull)
+  contact   Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  testAgent Agent?           @relation("ConversationTestAgent", fields: [testAgentId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, chatwootInstanceId, chatwootConversationId])
   @@index([tenantId])
   @@index([threadId])
+  @@index([testAgentId])
   @@map("conversations")
 }
 
@@ -512,9 +541,11 @@ model Agent {
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
-  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  toolSelections AgentToolSelection[]
-  chatwootBots   ChatwootAgentBot[]
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  toolSelections    AgentToolSelection[]
+  chatwootBots      ChatwootAgentBot[]
+  testInboxes       InboxTestAgent[]
+  testConversations Conversation[]       @relation("ConversationTestAgent")
 
   @@index([tenantId])
   @@map("agents")

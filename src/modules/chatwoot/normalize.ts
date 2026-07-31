@@ -176,16 +176,36 @@ export function isHumanAgentMessage(e: NormalizedChatwootEvent): boolean {
 // trimmed, case-insensitive text content — text-only by design). `/teste` activates a test agent for
 // THIS conversation; `/parar` silences it again without clearing memory; `/reset` clears its
 // memory/state while keeping it active. All are handled by the webhook gate.
-export type ControlCommand = "teste" | "parar" | "reset";
+export type ControlCommand = "teste" | "agentes" | "parar" | "reset";
 
 export function controlCommand(
   e: NormalizedChatwootEvent,
 ): ControlCommand | null {
   const lc = (e.message?.content ?? "").trim().toLowerCase();
-  if (lc === "/teste") return "teste";
+  if (lc === "/teste" || lc.startsWith("/teste ")) return "teste";
+  if (lc === "/agentes") return "agentes";
   if (lc === "/parar") return "parar";
   if (lc === "/reset") return "reset";
   return null;
+}
+
+// Optional persona selector from `/teste <id|nome|slug>`. null means "resume the previously selected
+// test persona, or use the primary agent". Parsing stays separate from controlCommand so existing
+// callers that only need command suppression keep a compact enum.
+export function testAgentSelector(e: NormalizedChatwootEvent): string | null {
+  const content = (e.message?.content ?? "").trim();
+  const match = /^\/teste(?:\s+(.+))?$/iu.exec(content);
+  const selector = match?.[1]?.trim();
+  return selector ? selector : null;
+}
+
+export function testAgentSlug(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 // True when the message is a control command. Such a message is NOT genuine customer engagement, so

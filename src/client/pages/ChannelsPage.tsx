@@ -162,6 +162,90 @@ function InboxAgentPicker({
   );
 }
 
+function InboxTestAgentsPicker({
+  value,
+  agents,
+  onChange,
+}: {
+  value: string[];
+  agents: AgentLite[];
+  onChange: (agentIds: string[]) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [pending, setPending] = useState(false);
+
+  async function toggle(agentId: string) {
+    if (pending) return;
+    const next = value.includes(agentId)
+      ? value.filter((id) => id !== agentId)
+      : [...value, agentId];
+    setPending(true);
+    try {
+      await onChange(next);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <DropdownMenuPrimitive.Root>
+      <DropdownMenuPrimitive.Trigger asChild>
+        <button
+          type="button"
+          disabled={pending}
+          aria-label={t("channels.testAgents", "Test agents")}
+          className="flex w-44 shrink-0 items-center justify-between gap-2 rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary focus:border-border-focus focus:outline-none disabled:opacity-60"
+        >
+          <span className="truncate">
+            {value.length === 0
+              ? t("channels.noTestAgents", "No test agents")
+              : t("channels.testAgentCount", "{{count}} test agent(s)", {
+                  count: value.length,
+                })}
+          </span>
+          {pending ? (
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-text-muted" />
+          ) : (
+            <ChevronDown className="h-4 w-4 shrink-0 text-text-muted" />
+          )}
+        </button>
+      </DropdownMenuPrimitive.Trigger>
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content
+          align="end"
+          sideOffset={4}
+          className="z-50 max-h-72 w-64 overflow-y-auto rounded-lg border border-border bg-bg-secondary p-1 shadow-lg"
+        >
+          {agents.length === 0 ? (
+            <div className="px-2 py-2 text-sm text-text-muted">
+              {t(
+                "channels.noEligibleTestAgents",
+                "Create another agent in test mode first.",
+              )}
+            </div>
+          ) : (
+            agents.map((agent) => (
+              <DropdownMenuPrimitive.CheckboxItem
+                key={agent.id}
+                checked={value.includes(agent.id)}
+                disabled={pending}
+                className={pickerItemCls}
+                onSelect={(event) => event.preventDefault()}
+                onCheckedChange={() => void toggle(agent.id)}
+              >
+                <span className="flex-1 truncate">{agent.name}</span>
+                {value.includes(agent.id) && (
+                  <Check className="h-4 w-4 shrink-0 text-accent" />
+                )}
+              </DropdownMenuPrimitive.CheckboxItem>
+            ))
+          )}
+        </DropdownMenuPrimitive.Content>
+      </DropdownMenuPrimitive.Portal>
+    </DropdownMenuPrimitive.Root>
+  );
+}
+
 // Bespoke loading placeholder: the deployment card + account rows, then the inbox list.
 function ChannelsSkeleton() {
   return (
@@ -651,6 +735,27 @@ export function ChannelsPage() {
     showToast(t("channels.bound", "Inbox updated."), "success");
   }
 
+  async function setTestAgents(inboxId: string, agentIds: string[]) {
+    const { data, error: err } = await api.api.v1.chatwoot
+      .inboxes({ id: inboxId })
+      ["test-agents"].put({ agentIds });
+    if (err || !data) {
+      showToast(
+        t("channels.bindError", "Could not update the inbox."),
+        "error",
+      );
+      throw err ?? new Error("no data");
+    }
+    setInboxes((prev) =>
+      prev.map((inbox) =>
+        inbox.id === inboxId
+          ? { ...inbox, testAgentIds: data.inbox.testAgentIds }
+          : inbox,
+      ),
+    );
+    showToast(t("channels.bound", "Inbox updated."), "success");
+  }
+
   async function reconnectBot(inboxId: string) {
     setReconnecting(inboxId);
     try {
@@ -1043,12 +1148,33 @@ export function ChannelsPage() {
                               )}
                             </span>
                           ) : (
-                            <InboxAgentPicker
-                              value={ib.agentId}
-                              agents={agents}
-                              label={t("channels.bindLabel", "Answering agent")}
-                              onChange={(agentId) => bindInbox(ib.id, agentId)}
-                            />
+                            <div className="flex flex-wrap justify-end gap-2">
+                              <InboxAgentPicker
+                                value={ib.agentId}
+                                agents={agents}
+                                label={t(
+                                  "channels.bindLabel",
+                                  "Answering agent",
+                                )}
+                                onChange={(agentId) =>
+                                  bindInbox(ib.id, agentId)
+                                }
+                              />
+                              {agents.find((agent) => agent.id === ib.agentId)
+                                ?.mode === "test" && (
+                                <InboxTestAgentsPicker
+                                  value={ib.testAgentIds}
+                                  agents={agents.filter(
+                                    (agent) =>
+                                      agent.mode === "test" &&
+                                      agent.id !== ib.agentId,
+                                  )}
+                                  onChange={(agentIds) =>
+                                    setTestAgents(ib.id, agentIds)
+                                  }
+                                />
+                              )}
+                            </div>
                           )}
                         </InboxRow>
                       ))}

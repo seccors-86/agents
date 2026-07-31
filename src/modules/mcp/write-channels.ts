@@ -11,6 +11,7 @@ import {
   reconnectInbox,
   rotateChatwootDeploymentToken,
   setConnectedAccounts,
+  setInboxTestAgents,
   softDisconnectChatwootInstance,
   syncInboxes,
 } from "@/modules/chatwoot/management";
@@ -342,6 +343,52 @@ export async function inboxBind(
       target,
       before: truncForAudit({ agentId: current.agentId }),
       after: truncForAudit({ agentId: updated.agentId }),
+    });
+    return ok({ dryRun: false, applied: true, target, inbox: updated });
+  } catch (e) {
+    return failOf(e);
+  }
+}
+
+export async function inboxTestAgentsSet(
+  principal: VerifiedToken,
+  args: { inbox_id: string; agent_ids: string[]; dry_run?: boolean },
+  deps: WriteDeps = {},
+): Promise<WriteResult> {
+  const base = deps.base ?? basePrisma;
+  const ctx = gate(principal);
+  if ("ok" in ctx) return ctx;
+  const inboxId = parseId(args.inbox_id, "inbox_id");
+  if (typeof inboxId !== "bigint") return inboxId;
+  const agentIds: bigint[] = [];
+  for (const raw of args.agent_ids) {
+    const parsed = parseId(raw, "agent_id");
+    if (typeof parsed !== "bigint") return parsed;
+    agentIds.push(parsed);
+  }
+  try {
+    const inboxes = await listInboxes(ctx, base);
+    const current = inboxes.find((inbox) => inbox.id === String(inboxId));
+    if (!current) return err("inbox not found");
+    const target = `inbox:${inboxId}`;
+    if (args.dry_run !== false) {
+      return ok({
+        dryRun: true,
+        action: "set_test_agents",
+        target,
+        currentAgentIds: current.testAgentIds,
+        newAgentIds: agentIds.map(String),
+        note: "Additional agents are selectable only in test mode; the primary remains the sole connected Chatwoot bot.",
+      });
+    }
+    const updated = await setInboxTestAgents(ctx, inboxId, agentIds, {}, base);
+    await recordMcpAudit(ctx, base, {
+      actorId: principal.userId,
+      actorType: "mcp",
+      action: "mcp.inbox_test_agents_set",
+      target,
+      before: truncForAudit({ agentIds: current.testAgentIds }),
+      after: truncForAudit({ agentIds: updated.testAgentIds }),
     });
     return ok({ dryRun: false, applied: true, target, inbox: updated });
   } catch (e) {

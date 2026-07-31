@@ -28,6 +28,7 @@ import {
   removeChatwootInstance,
   rotateChatwootDeploymentToken,
   setConnectedAccounts,
+  setInboxTestAgents,
   softDisconnectChatwootInstance,
   syncInboxes,
 } from "@/modules/chatwoot/management";
@@ -125,6 +126,37 @@ export const chatwootAdminController = new Elysia({
         }),
       }),
       response: errors(400, 401, 403, 404, 502),
+    },
+  )
+  .put(
+    "/inboxes/:id/test-agents",
+    async ({ tenantContext, params, body }) => {
+      const b = body as { agentIds: string[] };
+      return {
+        instance: instanceIdentity,
+        inbox: await setInboxTestAgents(
+          ctxOrThrow(tenantContext),
+          BigInt(params.id),
+          b.agentIds.map(BigInt),
+        ),
+      };
+    },
+    {
+      requireRole: "TENANT_ADMIN",
+      detail: doc(
+        "Set inbox test agents",
+        "Replace the additional enabled TEST-mode agents available on an inbox. The primary agent remains the only Chatwoot-connected bot and must also be in test mode.",
+      ),
+      params: t.Object({
+        id: t.String({ description: "Inbox id (BigInt string)." }),
+      }),
+      body: t.Object({
+        agentIds: t.Array(t.String(), {
+          description:
+            "Additional TEST-mode agent ids. The primary agent must not be repeated.",
+        }),
+      }),
+      response: errors(400, 401, 403, 404, 409, 502),
     },
   )
   // Tear down the whole Chatwoot connection (the "switch servers" path): wipes the local mirror

@@ -15,6 +15,8 @@ import {
   isNewIncomingMessage,
   normalizeChatwootEvent,
   shouldBotHandle,
+  testAgentSelector,
+  testAgentSlug,
 } from "@/modules/chatwoot/normalize";
 import { verifyChatwootSignature } from "@/modules/chatwoot/signing";
 import type { NormalizedChatwootEvent } from "@/modules/chatwoot/types";
@@ -201,12 +203,23 @@ describe("controlCommand", () => {
 
   test("recognizes test-mode commands case-insensitively", () => {
     expect(controlCommand(eventWithContent(" /TESTE "))).toBe("teste");
+    expect(controlCommand(eventWithContent("/teste Vitória 2"))).toBe("teste");
+    expect(controlCommand(eventWithContent("/AGENTES"))).toBe("agentes");
     expect(controlCommand(eventWithContent("/Parar"))).toBe("parar");
     expect(controlCommand(eventWithContent("/RESET"))).toBe("reset");
   });
 
-  test("/parar is a control message and ordinary text is not", () => {
+  test("extracts a test-agent selector and creates stable command slugs", () => {
+    expect(
+      testAgentSelector(eventWithContent("/teste Vitória Comercial")),
+    ).toBe("Vitória Comercial");
+    expect(testAgentSelector(eventWithContent("/teste"))).toBeNull();
+    expect(testAgentSlug("  Vitória Comercial  ")).toBe("vitoria-comercial");
+  });
+
+  test("commands are control messages and ordinary text is not", () => {
     expect(isCommandMessage(eventWithContent("/parar"))).toBe(true);
+    expect(isCommandMessage(eventWithContent("/agentes"))).toBe(true);
     expect(controlCommand(eventWithContent("pode parar"))).toBeNull();
     expect(isCommandMessage(eventWithContent("pode parar"))).toBe(false);
   });

@@ -12,6 +12,7 @@ import {
   contactInboxThreadId,
   getCheckpointer,
   resolveGraphThreadId,
+  testAgentThreadId,
 } from "@/graph/checkpointer";
 import { ingestMessageIntoThread } from "@/graph/ingest";
 import { runAgentTurn } from "@/graph/runtime";
@@ -38,11 +39,8 @@ import {
   clearConversationError,
   recordConversationError,
 } from "@/modules/conversations/error";
-import {
-  armDebounce,
-  debounceDedupeKey,
-  resolveDebounceConfig,
-} from "@/modules/debounce/service";
+import { armDebounce, debounceDedupeKey } from "@/modules/debounce/service";
+import { readDebounceConfig } from "@/modules/debounce/settings";
 import { cancelPendingJob } from "@/modules/scheduler/service";
 import {
   resolveSttConfig,
@@ -64,6 +62,8 @@ import {
   isNewIncomingMessage,
   normalizeChatwootEvent,
   shouldBotHandle,
+  testAgentSelector,
+  testAgentSlug,
 } from "./normalize";
 import { renderInboundMessage } from "./render";
 import {
@@ -72,6 +72,7 @@ import {
   CHATWOOT_TIMESTAMP_HEADER,
   verifyChatwootSignature,
 } from "./signing";
+import { resolveEffectiveInboxAgentForConversationRow } from "./test-routing";
 import type { NormalizedChatwootEvent } from "./types";
 
 // Dedicated Chatwoot Agent Bot webhook receiver. Resolve tenant+instance by the opaque
@@ -102,6 +103,7 @@ async function inboxAgentRuntime(
   tenantId: bigint,
   instanceId: bigint,
   chatwootInboxId: number | null,
+  chatwootConversationId: number | null,
   base: PrismaClient,
 ): Promise<{
   agentId: bigint;
@@ -124,19 +126,33 @@ async function inboxAgentRuntime(
           chatwootInboxId,
         },
       },
-      select: { agentId: true },
+      select: { id: true },
     });
-    if (!inbox?.agentId) return null;
-    const agent = await db.agent.findUnique({
-      where: { id: inbox.agentId },
-      select: { enabled: true, mode: true, settings: true },
-    });
-    if (!agent) return null;
+    if (!inbox) return null;
+    const conversation =
+      chatwootConversationId === null
+        ? null
+        : await db.conversation.findUnique({
+            where: {
+              tenantId_chatwootInstanceId_chatwootConversationId: {
+                tenantId,
+                chatwootInstanceId: instanceId,
+                chatwootConversationId,
+              },
+            },
+            select: { id: true },
+          });
+    const routed = await resolveEffectiveInboxAgentForConversationRow(
+      db,
+      inbox.id,
+      conversation?.id ?? null,
+    );
+    if (!routed) return null;
     return {
-      agentId: inbox.agentId,
-      enabled: agent.enabled,
-      mode: agent.mode,
-      settings: agent.settings,
+      agentId: routed.agentId,
+      enabled: routed.enabled,
+      mode: routed.mode,
+      settings: routed.settings,
     };
   });
 }
@@ -529,12 +545,12 @@ export function outOfHoursGate(
   return { silence: true, postNote: !noticeAlreadySent };
 }
 
-// Test-mode gate + the /teste, /parar and /reset commands. Runs at the TOP of the actionable
+// Test-mode gate + the /agentes, /teste, /parar and /reset commands. Runs at the TOP of the actionable
 // branch, before eager STT / debounce / the agent turn. Returns true when the delivery is consumed
 // here — a command was handled, or a "test" agent must stay silent because this conversation hasn't
 // been activated with /teste yet — so the caller skips all agent processing (the mirror already ran).
 // Control commands ONLY apply to a test-mode agent (commandActive, resolved by the caller); for any
-// other agent /teste, /parar and /reset are ordinary customer text and fall through to normal
+// other agent these commands are ordinary customer text and fall through to normal
 // processing.
 async function maybeConsumeCommandOrGate(params: {
   tenantId: bigint;
@@ -550,6 +566,7 @@ async function maybeConsumeCommandOrGate(params: {
   if (n.conversationId === null) return false;
   const conversationId = n.conversationId;
   const isTeste = commandActive && command === "teste";
+  const isAgentes = commandActive && command === "agentes";
   const isParar = commandActive && command === "parar";
   const isReset = commandActive && command === "reset";
 
@@ -568,6 +585,7 @@ async function maybeConsumeCommandOrGate(params: {
         contactId: true,
         contactInboxId: true,
         testActivatedAt: true,
+        testAgentId: true,
         testNoticeSentAt: true,
         outOfHoursNoticeSentAt: true,
         redirectSentAt: true,
@@ -578,6 +596,8 @@ async function maybeConsumeCommandOrGate(params: {
     });
     if (!conv) return null;
     let agentId: bigint | null = null;
+    let primaryAgentId: bigint | null = null;
+    let availableTestAgents: { id: bigint; name: string }[] = [];
     let inboxChatwootId: number | null = null;
     let agentSettings: unknown = null;
     let mode = "production";
@@ -585,13 +605,47 @@ async function maybeConsumeCommandOrGate(params: {
     if (conv.inboxId !== null) {
       const inbox = await db.inbox.findUnique({
         where: { id: conv.inboxId },
-        select: { agentId: true, chatwootInboxId: true },
+        select: {
+          agentId: true,
+          chatwootInboxId: true,
+          testAgents: {
+            select: {
+              agent: {
+                select: { id: true, name: true, mode: true, enabled: true },
+              },
+            },
+          },
+        },
       });
       inboxChatwootId = inbox?.chatwootInboxId ?? null;
       if (inbox?.agentId) {
-        agentId = inbox.agentId;
+        primaryAgentId = inbox.agentId;
+        const primary = await db.agent.findUnique({
+          where: { id: primaryAgentId },
+          select: {
+            id: true,
+            name: true,
+            mode: true,
+            enabled: true,
+          },
+        });
+        availableTestAgents = [
+          ...(primary?.mode === "test" && primary.enabled
+            ? [{ id: primary.id, name: primary.name }]
+            : []),
+          ...inbox.testAgents
+            .map((x) => x.agent)
+            .filter((a) => a.mode === "test" && a.enabled)
+            .map(({ id, name }) => ({ id, name })),
+        ];
+        const routed = await resolveEffectiveInboxAgentForConversationRow(
+          db,
+          conv.inboxId,
+          conv.id,
+        );
+        agentId = routed?.agentId ?? primaryAgentId;
         const agent = await db.agent.findUnique({
-          where: { id: inbox.agentId },
+          where: { id: agentId },
           select: { mode: true, businessHoursId: true, settings: true },
         });
         if (agent) {
@@ -614,7 +668,16 @@ async function maybeConsumeCommandOrGate(params: {
         }
       }
     }
-    return { conv, agentId, mode, hours, inboxChatwootId, agentSettings };
+    return {
+      conv,
+      agentId,
+      primaryAgentId,
+      availableTestAgents,
+      mode,
+      hours,
+      inboxChatwootId,
+      agentSettings,
+    };
   });
   if (!ctx) return false;
 
@@ -622,8 +685,8 @@ async function maybeConsumeCommandOrGate(params: {
   const postAck = async (text: string): Promise<void> => {
     try {
       const bot =
-        ctx.agentId !== null
-          ? await loadAgentBot(tenantId, instanceId, ctx.agentId, base)
+        ctx.primaryAgentId !== null
+          ? await loadAgentBot(tenantId, instanceId, ctx.primaryAgentId, base)
           : null;
       const client = await loadChatwootClient(tenantId, instanceId, {
         base,
@@ -644,8 +707,8 @@ async function maybeConsumeCommandOrGate(params: {
   const postPrivateNote = async (text: string): Promise<void> => {
     try {
       const bot =
-        ctx.agentId !== null
-          ? await loadAgentBot(tenantId, instanceId, ctx.agentId, base)
+        ctx.primaryAgentId !== null
+          ? await loadAgentBot(tenantId, instanceId, ctx.primaryAgentId, base)
           : null;
       const client = await loadChatwootClient(tenantId, instanceId, {
         base,
@@ -694,14 +757,64 @@ async function maybeConsumeCommandOrGate(params: {
     }
   }
 
-  // ── /teste: activate test mode for THIS conversation, ACK, consume. ──
+  if (isAgentes) {
+    const lines = ctx.availableTestAgents.map(
+      (agent) =>
+        `• ${agent.name}: /teste ${testAgentSlug(agent.name)} (id ${agent.id})`,
+    );
+    await postAck(
+      lines.length > 0
+        ? `🧪 Agentes disponíveis nesta conversa:\n${lines.join("\n")}`
+        : "🧪 Não há agentes de teste disponíveis neste canal.",
+    );
+    return true;
+  }
+
+  // ── /teste [persona]: select + activate test mode for THIS conversation, ACK, consume. ──
   if (isTeste) {
+    const selector = testAgentSelector(n);
+    let selected =
+      selector === null && ctx.conv.testAgentId !== null
+        ? (ctx.availableTestAgents.find(
+            (agent) => agent.id === ctx.conv.testAgentId,
+          ) ?? null)
+        : null;
+    if (selector !== null) {
+      const normalized = testAgentSlug(selector);
+      const matches = ctx.availableTestAgents.filter(
+        (agent) =>
+          String(agent.id) === selector ||
+          agent.name.toLocaleLowerCase("pt-BR") ===
+            selector.toLocaleLowerCase("pt-BR") ||
+          testAgentSlug(agent.name) === normalized,
+      );
+      if (matches.length !== 1) {
+        await postAck(
+          matches.length === 0
+            ? "Não encontrei esse agente neste canal. Envie /agentes para ver as opções disponíveis."
+            : "Esse nome identifica mais de um agente. Envie /agentes e use o número exibido após “id”.",
+        );
+        return true;
+      }
+      selected = matches[0] ?? null;
+    }
+    selected ??=
+      ctx.availableTestAgents.find(
+        (agent) => agent.id === ctx.primaryAgentId,
+      ) ?? null;
+    if (!selected) {
+      await postAck("🧪 Não há agente de teste disponível neste canal.");
+      return true;
+    }
     const activatedAt = new Date();
+    const selectedAdditional =
+      ctx.primaryAgentId !== null && selected.id !== ctx.primaryAgentId;
     await runScopedOn(base, sysCtx(tenantId), (db) =>
       db.conversation.update({
         where: { id: ctx.conv.id },
         data: {
           testActivatedAt: activatedAt,
+          testAgentId: selectedAdditional ? selected.id : null,
           // Clean engagement slate at activation: a message received while the agent was silenced
           // (pre-activation) must not leave a follow-up pending NOR look like a completed sequence.
           // Clearing both anchors yields the "none" indicator state (not "pending", not "complete");
@@ -729,8 +842,12 @@ async function maybeConsumeCommandOrGate(params: {
         errMsg(err),
       );
     }
-    await postAck("🧪 Modo teste ativado para esta conversa.");
-    logger.info("chatwoot: /teste activated (conv=%s)", String(conversationId));
+    await postAck(`🧪 ${selected.name} ativado nesta conversa.`);
+    logger.info(
+      "chatwoot: /teste activated (conv=%s agent=%s)",
+      String(conversationId),
+      String(selected.id),
+    );
     return true;
   }
 
@@ -780,7 +897,25 @@ async function maybeConsumeCommandOrGate(params: {
     // divider's last-conversation + the ingestion watermark), so a reset truly starts this channel's
     // conversation over. Only THIS channel's memory is cleared (the contact's other channels keep
     // their own threads), which matches where the operator typed /reset.
-    if (ctx.conv.contactInboxId !== null) {
+    if (ctx.conv.testAgentId !== null) {
+      try {
+        const cp = await getCheckpointer();
+        await cp.deleteThread(
+          testAgentThreadId(
+            tenantId,
+            instanceId,
+            ctx.conv.testAgentId,
+            conversationId,
+          ),
+        );
+      } catch (err) {
+        logger.warn(
+          "chatwoot: /reset delete test-agent thread failed (conv=%s): %s",
+          String(conversationId),
+          errMsg(err),
+        );
+      }
+    } else if (ctx.conv.contactInboxId !== null) {
       const contactInboxId = ctx.conv.contactInboxId;
       try {
         const cp = await getCheckpointer();
@@ -1034,6 +1169,7 @@ export async function processChatwootDelivery(
         params.tenantId,
         params.instanceId,
         n.inboxId,
+        n.conversationId,
         base,
       )
     : null;
@@ -1097,6 +1233,7 @@ export async function processChatwootDelivery(
         params.tenantId,
         params.instanceId,
         n.inboxId,
+        n.conversationId,
         base,
       );
       if (closingRt) {
@@ -1207,13 +1344,9 @@ export async function processChatwootDelivery(
       let armed = false;
       if (n.conversationId !== null && n.inboxId !== null) {
         try {
-          const cfg = await resolveDebounceConfig(
-            params.tenantId,
-            params.instanceId,
-            n.inboxId,
-            base,
-          );
-          if (cfg) {
+          const cfg =
+            rt?.enabled === true ? readDebounceConfig(rt.settings) : null;
+          if (cfg?.enabled) {
             const threadId = chatwootThreadId(
               params.tenantId,
               params.instanceId,

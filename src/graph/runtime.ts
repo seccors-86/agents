@@ -17,6 +17,7 @@ import {
   shouldBotHandle,
 } from "@/modules/chatwoot/normalize";
 import { renderInboundMessage } from "@/modules/chatwoot/render";
+import { resolveEffectiveInboxAgentForConversationRow } from "@/modules/chatwoot/test-routing";
 import type { NormalizedChatwootEvent } from "@/modules/chatwoot/types";
 import {
   emitFlowEvent,
@@ -28,7 +29,11 @@ import { deliverReply } from "@/modules/split/service";
 import { llmNormalizeForSpeech } from "@/modules/tts/normalize";
 import { synthesizeReply } from "@/modules/tts/service";
 import { shouldReplyWithAudio } from "@/modules/tts/settings";
-import { chatwootThreadId, resolveGraphThreadId } from "./checkpointer";
+import {
+  chatwootThreadId,
+  resolveGraphThreadId,
+  testAgentThreadId,
+} from "./checkpointer";
 import { lastAssistantText } from "./graph";
 import { clearTurnInFlight, markTurnInFlight } from "./inflight";
 import { CONVERSATION_DIVIDER } from "./ingest";
@@ -189,14 +194,16 @@ export async function runLoadedTurn(
   // (continuity, without mixing parallel channels), while the per-conversation threadId stays the
   // flow/debounce/watermark key. When a NEW conversation reuses the thread, prepend a divider so the
   // model treats it as a fresh attendance.
-  const graphThreadId = resolveGraphThreadId(
-    tenantId,
-    instanceId,
-    conversationId,
-    loaded.contactInboxId,
-  );
+  const graphThreadId = loaded.selectedAdditionalTestAgent
+    ? testAgentThreadId(tenantId, instanceId, loaded.agentId, conversationId)
+    : resolveGraphThreadId(
+        tenantId,
+        instanceId,
+        conversationId,
+        loaded.contactInboxId,
+      );
   let turnText = text;
-  if (loaded.contactInboxId != null) {
+  if (loaded.contactInboxId != null && !loaded.selectedAdditionalTestAgent) {
     const contactInboxId = loaded.contactInboxId;
     const isNewConversation = await runScopedOn(
       base,
@@ -356,7 +363,9 @@ export async function runLoadedTurn(
     // Re-check the live assignee (mirror) before posting: a human may have taken over during
     // the LLM call. NOTE: small TOCTOU between this read and the POST (the post is network and
     // cannot share the tx); acceptable for the single-replica MVP.
-    const ourBot = loaded.agentBotId ?? agentBotId;
+    // agentBotId is the physically connected inbox bot that owns the conversation. An additional
+    // test persona posts with its own token, but Chatwoot assignment remains on the entry bot.
+    const ourBot = agentBotId ?? loaded.agentBotId;
     // Re-read the live assignee AND the contact's current voice preference in the same scoped read.
     // set_voice_preference writes Contact.voiceReply DURING the invoke, so the pre-turn snapshot
     // (loaded.contactVoiceReply) is stale — using the fresh value lets "prefiro texto" take effect in
@@ -563,14 +572,30 @@ export async function runAgentTurn(
           chatwootInboxId: inboxId,
         },
       },
-      select: { agentId: true },
+      select: { id: true },
     });
-    if (!inbox?.agentId) return null;
+    if (!inbox) return null;
+    const conversation = await db.conversation.findUnique({
+      where: {
+        tenantId_chatwootInstanceId_chatwootConversationId: {
+          tenantId,
+          chatwootInstanceId: instanceId,
+          chatwootConversationId: conversationId,
+        },
+      },
+      select: { id: true },
+    });
+    const routed = await resolveEffectiveInboxAgentForConversationRow(
+      db,
+      inbox.id,
+      conversation?.id ?? null,
+    );
+    if (!routed) return null;
     return loadAgentConfig(db, {
       tenantId,
       instanceId,
       conversationId,
-      agentId: inbox.agentId,
+      agentId: routed.agentId,
       threadId,
     });
   });

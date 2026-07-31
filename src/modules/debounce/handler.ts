@@ -18,6 +18,7 @@ import {
 } from "@/modules/chatwoot/messages";
 import { shouldBotHandle } from "@/modules/chatwoot/normalize";
 import { renderInboundMessage } from "@/modules/chatwoot/render";
+import { resolveEffectiveInboxAgentForConversationRow } from "@/modules/chatwoot/test-routing";
 import {
   clearConversationError,
   recordConversationError,
@@ -272,20 +273,17 @@ export async function flushDebounceJob(
     ) {
       return "gate-closed" as const;
     }
-    const inbox = await db.inbox.findUnique({
-      where: { id: conv.inboxId },
-      select: { agentId: true },
-    });
-    if (!inbox?.agentId) return null;
-    const agentRow = await db.agent.findUnique({
-      where: { id: inbox.agentId },
-      select: { settings: true },
-    });
+    const routed = await resolveEffectiveInboxAgentForConversationRow(
+      db,
+      conv.inboxId,
+      conv.id,
+    );
+    if (!routed) return null;
     const loaded = await loadAgentConfig(db, {
       tenantId,
       instanceId,
       conversationId,
-      agentId: inbox.agentId,
+      agentId: routed.agentId,
       threadId,
     });
     if (!loaded) return null;
@@ -293,7 +291,7 @@ export async function flushDebounceJob(
       convDbId: conv.id,
       watermark: conv.lastHandledMessageId,
       loaded,
-      settings: agentRow?.settings ?? {},
+      settings: routed.settings ?? {},
     };
   });
   // No agent / unbound inbox / human took over → nothing to do (not a failure).
