@@ -7,7 +7,9 @@ import {
   parseInboxList,
 } from "@/modules/chatwoot/management";
 import {
+  controlCommand,
   firstAudioAttachment,
+  isCommandMessage,
   isHumanAgentMessage,
   isIncomingMessage,
   isNewIncomingMessage,
@@ -181,6 +183,32 @@ describe("normalizeChatwootEvent", () => {
   test("returns null for a non-object or eventless payload", () => {
     expect(normalizeChatwootEvent(null)).toBeNull();
     expect(normalizeChatwootEvent({ foo: 1 })).toBeNull();
+  });
+});
+
+describe("controlCommand", () => {
+  const eventWithContent = (content: string) => {
+    const event = normalizeChatwootEvent({
+      event: "message_created",
+      id: 1001,
+      content,
+      message_type: "incoming",
+      conversation: { id: 42, inbox_id: 7, status: "pending" },
+    });
+    if (!event) throw new Error("fixture did not normalize");
+    return event;
+  };
+
+  test("recognizes test-mode commands case-insensitively", () => {
+    expect(controlCommand(eventWithContent(" /TESTE "))).toBe("teste");
+    expect(controlCommand(eventWithContent("/Parar"))).toBe("parar");
+    expect(controlCommand(eventWithContent("/RESET"))).toBe("reset");
+  });
+
+  test("/parar is a control message and ordinary text is not", () => {
+    expect(isCommandMessage(eventWithContent("/parar"))).toBe(true);
+    expect(controlCommand(eventWithContent("pode parar"))).toBeNull();
+    expect(isCommandMessage(eventWithContent("pode parar"))).toBe(false);
   });
 });
 
