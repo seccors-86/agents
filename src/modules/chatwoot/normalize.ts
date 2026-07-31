@@ -174,21 +174,24 @@ export function isHumanAgentMessage(e: NormalizedChatwootEvent): boolean {
 
 // The control commands an operator types into the conversation to drive the agent (matched on the
 // trimmed, case-insensitive text content — text-only by design). `/teste` activates a test agent for
-// THIS conversation; `/reset` clears its memory/state. Both are handled by the webhook gate.
-export type ControlCommand = "teste" | "reset";
+// THIS conversation; `/parar` silences it again without clearing memory; `/reset` clears its
+// memory/state while keeping it active. All are handled by the webhook gate.
+export type ControlCommand = "teste" | "parar" | "reset";
 
 export function controlCommand(
   e: NormalizedChatwootEvent,
 ): ControlCommand | null {
   const lc = (e.message?.content ?? "").trim().toLowerCase();
   if (lc === "/teste") return "teste";
+  if (lc === "/parar") return "parar";
   if (lc === "/reset") return "reset";
   return null;
 }
 
 // True when the message is a control command. Such a message is NOT genuine customer engagement, so
 // it must not advance the follow-up / 24h-window inbound watermark (`lastInboundAt`) — otherwise a
-// bare `/teste` or `/reset` would look like a fresh customer reply and arm a proactive follow-up.
+// bare `/teste`, `/parar` or `/reset` would look like a fresh customer reply and arm a proactive
+// follow-up.
 export function isCommandMessage(e: NormalizedChatwootEvent): boolean {
   return controlCommand(e) !== null;
 }

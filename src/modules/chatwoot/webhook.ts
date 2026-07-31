@@ -38,7 +38,11 @@ import {
   clearConversationError,
   recordConversationError,
 } from "@/modules/conversations/error";
-import { armDebounce, resolveDebounceConfig } from "@/modules/debounce/service";
+import {
+  armDebounce,
+  debounceDedupeKey,
+  resolveDebounceConfig,
+} from "@/modules/debounce/service";
 import { cancelPendingJob } from "@/modules/scheduler/service";
 import {
   resolveSttConfig,
@@ -525,12 +529,13 @@ export function outOfHoursGate(
   return { silence: true, postNote: !noticeAlreadySent };
 }
 
-// Test-mode gate + the /teste and /reset commands (item 1 + 2). Runs at the TOP of the actionable
+// Test-mode gate + the /teste, /parar and /reset commands. Runs at the TOP of the actionable
 // branch, before eager STT / debounce / the agent turn. Returns true when the delivery is consumed
 // here — a command was handled, or a "test" agent must stay silent because this conversation hasn't
 // been activated with /teste yet — so the caller skips all agent processing (the mirror already ran).
 // Control commands ONLY apply to a test-mode agent (commandActive, resolved by the caller); for any
-// other agent /teste and /reset are ordinary customer text and fall through to normal processing.
+// other agent /teste, /parar and /reset are ordinary customer text and fall through to normal
+// processing.
 async function maybeConsumeCommandOrGate(params: {
   tenantId: bigint;
   instanceId: bigint;
@@ -545,6 +550,7 @@ async function maybeConsumeCommandOrGate(params: {
   if (n.conversationId === null) return false;
   const conversationId = n.conversationId;
   const isTeste = commandActive && command === "teste";
+  const isParar = commandActive && command === "parar";
   const isReset = commandActive && command === "reset";
 
   // Resolve the conversation row + the inbox's agent (mode + the availability schedule). DB only.
@@ -725,6 +731,44 @@ async function maybeConsumeCommandOrGate(params: {
     }
     await postAck("🧪 Modo teste ativado para esta conversa.");
     logger.info("chatwoot: /teste activated (conv=%s)", String(conversationId));
+    return true;
+  }
+
+  // ── /parar: silence the test agent for THIS conversation without clearing its memory. ──
+  if (isParar) {
+    await runScopedOn(base, sysCtx(tenantId), (db) =>
+      db.conversation.update({
+        where: { id: ctx.conv.id },
+        data: {
+          testActivatedAt: null,
+          testNoticeSentAt: null,
+          lastInboundAt: null,
+          lastFollowUpAt: null,
+        },
+      }),
+    );
+
+    const threadId = chatwootThreadId(tenantId, instanceId, conversationId);
+    for (const [kind, dedupeKey] of [
+      ["DEBOUNCE", debounceDedupeKey(threadId)],
+      ["FOLLOWUP", `followup:${threadId}`],
+    ] as const) {
+      try {
+        await cancelPendingJob(tenantId, kind, dedupeKey, base);
+      } catch (err) {
+        logger.warn(
+          "chatwoot: /parar cancel %s failed (conv=%s): %s",
+          kind.toLowerCase(),
+          String(conversationId),
+          errMsg(err),
+        );
+      }
+    }
+
+    await postAck(
+      "⏸️ Modo teste pausado nesta conversa. Envie /teste para reativar.",
+    );
+    logger.info("chatwoot: /parar (conv=%s)", String(conversationId));
     return true;
   }
 
@@ -980,7 +1024,8 @@ export async function processChatwootDelivery(
   const isNewIncoming = isNewIncomingMessage(n);
 
   // Resolve the bound agent's runtime knobs (enabled + mode) once on a new incoming message (cheap
-  // scoped read). It gates two things: (1) command activeness — control commands (/teste, /reset)
+  // scoped read). It gates two things: (1) command activeness — control commands
+  // (/teste, /parar, /reset)
   // only apply to a TEST-mode agent, otherwise they are ordinary customer text, and the mirror must
   // NOT count an ACTIVE command as genuine engagement (no lastInboundAt advance / follow-up arm); and
   // (2) eager media — STT/vision run on every incoming message only for an ENABLED + PRODUCTION agent.
