@@ -724,6 +724,16 @@ async function maybeConsumeCommandOrGate(params: {
     }
   };
 
+  // `/teste` is an explicit takeover command in a test-only agent. A conversation may already be
+  // `open` or assigned to a human (for example, an old/imported ticket); return it to the bot before
+  // activating the persona. Ordinary customer messages never take this path and remain protected by
+  // shouldBotHandle.
+  const returnConversationToBot = async (): Promise<void> => {
+    const client = await loadChatwootClient(tenantId, instanceId, { base });
+    await client.unassignConversation(conversationId, { asAdmin: true });
+    await client.toggleStatus(conversationId, "pending", { asAdmin: true });
+  };
+
   // ── Redirect cross-link: on the widget conversation's first inbound after the merge, link it to its
   //    WhatsApp sibling — propagate that side's /teste activation + post cross-link private notes, once.
   //    Runs BEFORE the test-mode gate so a propagated activation is honored on this same turn. ──
@@ -804,6 +814,19 @@ async function maybeConsumeCommandOrGate(params: {
       ) ?? null;
     if (!selected) {
       await postAck("🧪 Não há agente de teste disponível neste canal.");
+      return true;
+    }
+    try {
+      await returnConversationToBot();
+    } catch (err) {
+      logger.warn(
+        "chatwoot: /teste could not return conversation to bot (conv=%s): %s",
+        String(conversationId),
+        errMsg(err),
+      );
+      await postAck(
+        "Não consegui assumir esta conversa agora. Tente novamente em alguns segundos.",
+      );
       return true;
     }
     const activatedAt = new Date();
@@ -1320,7 +1343,7 @@ export async function processChatwootDelivery(
   // Hoisted so the ingestion pass below can tell an out-of-hours-silenced incoming (consumed) from an
   // answered one. Stays false on every path that never runs the gate.
   let consumed = false;
-  if (act && isNewIncoming) {
+  if ((act || commandActive) && isNewIncoming) {
     // Test-mode gate + /teste and /reset commands — may consume the delivery (skip all agent work).
     consumed = await maybeConsumeCommandOrGate({
       tenantId: params.tenantId,
