@@ -873,7 +873,7 @@ function emergencyConsultationAudiosTool(ctx: ToolCtx) {
         ctx.conversationId,
         "Depois de ouvir os áudios, me conta se ficou alguma dúvida sobre como funciona a Consulta Emergencial, tá bem? 💛",
       );
-      return "The three approved Camila audio messages and the contextual follow-up were sent in order. Produce no additional customer-facing text this turn. Do not repeat their content or send them again unless the customer explicitly asks.";
+      return "The three approved Camila audio messages were sent. The customer was then asked exactly: 'Depois de ouvir os áudios, me conta se ficou alguma dúvida sobre como funciona a Consulta Emergencial, tá bem? 💛'. The customer's next message answers this question. If they confirm understanding or say they have no questions, do not ask about questions again; advance by offering to explain the investment and payment options. Produce no additional customer-facing text this turn. Do not repeat the audios unless explicitly requested.";
     },
     {
       name: "send_emergency_consultation_audios",
