@@ -67,6 +67,18 @@ export function contactInboxThreadId(
   return `${tenantId}:${instanceId}:ci:${contactInboxId}`;
 }
 
+// Isolated memory for an additional test persona. It includes the persona and conversation ids so
+// switching agents in the same Chatwoot conversation can never leak one agent's prompt history into
+// another. Production and the primary test agent keep the established contact-inbox continuity key.
+export function testAgentThreadId(
+  tenantId: bigint,
+  instanceId: bigint,
+  agentId: bigint,
+  conversationId: number,
+): string {
+  return `${tenantId}:${instanceId}:test-agent:${agentId}:${conversationId}`;
+}
+
 // Resolve the graph memory thread for a conversation: per-contact-inbox when the native ContactInbox
 // id is known (the normal case for real traffic — the mirror writes it before any turn), else degrade
 // to the per-conversation thread. The fallback is NOT a second key scheme: a null contactInboxId only

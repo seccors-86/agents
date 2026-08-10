@@ -146,6 +146,9 @@ export interface AgentConfig {
   // The native Chatwoot ContactInbox id (one contact on one channel) for this conversation. Keys the
   // graph memory thread (see resolveGraphThreadId). null on legacy rows / the playground.
   contactInboxId: number | null;
+  // True when this config was loaded for an additional test persona selected on the conversation.
+  // The runtime uses an agent-scoped checkpointer thread so two test personas never share memory.
+  selectedAdditionalTestAgent: boolean;
   systemPrompt: string;
   mc: ModelConfig;
   apiKey: string;
@@ -318,6 +321,7 @@ export async function loadAgentConfig(
     select: {
       id: true,
       contactInboxId: true,
+      testAgentId: true,
       contact: {
         select: {
           id: true,
@@ -430,6 +434,7 @@ export async function loadAgentConfig(
     inboxDbId: conv?.inbox?.id ?? null,
     contactDbId: conv?.contact?.id ?? null,
     contactInboxId: conv?.contactInboxId ?? null,
+    selectedAdditionalTestAgent: conv?.testAgentId === agent.id,
     systemPrompt,
     mc,
     apiKey,

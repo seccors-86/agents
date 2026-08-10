@@ -344,6 +344,33 @@ export async function updateAgent(
       where: { id },
       select: AGENT_SELECT,
     });
+    // Additional inbox personas are a test-only facility. If an agent leaves test mode (or is
+    // disabled), remove it from every test roster and deactivate conversations that selected it.
+    if (row.mode !== "test" || !row.enabled) {
+      await db.inboxTestAgent.deleteMany({ where: { agentId: id } });
+      await db.conversation.updateMany({
+        where: { testAgentId: id },
+        data: { testAgentId: null, testActivatedAt: null },
+      });
+    }
+    // When this agent is the primary and enters production, the whole inbox becomes single-agent:
+    // remove every additional persona, including agents other than the one being updated.
+    if (row.mode !== "test") {
+      const primaryInboxes = await db.inbox.findMany({
+        where: { agentId: id },
+        select: { id: true },
+      });
+      const inboxIds = primaryInboxes.map((inbox) => inbox.id);
+      if (inboxIds.length > 0) {
+        await db.inboxTestAgent.deleteMany({
+          where: { inboxId: { in: inboxIds } },
+        });
+        await db.conversation.updateMany({
+          where: { inboxId: { in: inboxIds }, testAgentId: { not: null } },
+          data: { testAgentId: null, testActivatedAt: null },
+        });
+      }
+    }
     return toDto(row);
   });
   // Arm the sweep if settings were updated and follow-up is now enabled (idempotent).

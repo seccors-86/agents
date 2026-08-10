@@ -844,6 +844,46 @@ function skipReplyTool(_ctx: ToolCtx) {
   );
 }
 
+// LactaSoul's approved, pre-recorded explanation of the postpartum emergency consultation. The
+// files are mounted by the tenant stack; keeping the binary media outside the image lets operators
+// replace an approved recording without rebuilding the application. The tool itself sends the
+// introduction first, then the three voice notes in their required order.
+function emergencyConsultationAudiosTool(ctx: ToolCtx) {
+  return tool(
+    async () => {
+      const dir = process.env.EMERGENCY_CONSULTATION_AUDIO_DIR?.trim();
+      if (!dir)
+        return "Audio sequence is not configured. Do not claim it was sent.";
+      const names = ["SEQ 01.mpeg", "SEQ 02.mpeg", "SEQ 03.mpeg"];
+      const files = names.map((name) => Bun.file(`${dir}/${name}`));
+      if (
+        !(await Promise.all(files.map((file) => file.exists()))).every(Boolean)
+      ) {
+        return "One or more approved audio files are unavailable. Do not claim they were sent.";
+      }
+      for (const [index, file] of files.entries()) {
+        await ctx.client.sendAudioMessage(
+          ctx.conversationId,
+          await file.arrayBuffer(),
+          `consultoria-emergencial-${index + 1}.mp3`,
+          "audio/mpeg",
+        );
+      }
+      await ctx.client.sendMessage(
+        ctx.conversationId,
+        "Depois de ouvir os áudios, me conta se ficou alguma dúvida sobre como funciona a Consulta Emergencial, tá bem? 💛",
+      );
+      return "The three approved Camila audio messages were sent. The customer was then asked exactly: 'Depois de ouvir os áudios, me conta se ficou alguma dúvida sobre como funciona a Consulta Emergencial, tá bem? 💛'. The customer's next message answers this question. If they confirm understanding or say they have no questions, do not ask about questions again; advance by offering to explain the investment and payment options. Produce no additional customer-facing text this turn. Do not repeat the audios unless explicitly requested.";
+    },
+    {
+      name: "send_emergency_consultation_audios",
+      description:
+        "Send Camila's three approved WhatsApp voice notes explaining LactaSoul's postpartum Emergency Consultation. Use only after confirming the baby has already been born, recognizing a current breastfeeding difficulty, asking permission to send Camila's audios, and receiving a clear acceptance such as 'sim', 'pode', 'ok' or equivalent. Call it immediately after that acceptance and only once per conversation, before explaining the consultation or presenting the investment. Do not use for pregnant customers, generic questions, refusal, preference for text, or when the customer has already received the sequence. This tool sends the three audios and then a contextual follow-up beginning with 'Depois de ouvir os áudios'. Do not send another announcement or any additional response after calling it.",
+      schema: z.object({}),
+    },
+  );
+}
+
 // Utility tool: exact arithmetic without a model round-trip. Context-free, so it is also exposed
 // in the playground (where there is no conversation to act on).
 function calculatorTool(_ctx: ToolCtx) {
@@ -916,6 +956,7 @@ export function buildNativeTools(
     setVoicePreferenceTool(ctx),
     reactToMessageTool(ctx),
     skipReplyTool(ctx),
+    emergencyConsultationAudiosTool(ctx),
     calculatorTool(ctx),
     getCurrentTimeTool(ctx),
   ];

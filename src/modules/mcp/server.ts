@@ -88,6 +88,7 @@ import {
   inboxBind,
   inboxReconcile,
   inboxReconnect,
+  inboxTestAgentsSet,
   instanceDisconnect,
   instanceListAccounts,
   instanceSyncInboxes,
@@ -1615,6 +1616,29 @@ export function buildMcpServer(principal: VerifiedToken): McpServer {
       },
       async (args: { inbox_id: string; dry_run?: boolean }, eff) =>
         writeContent(await inboxReconnect(eff, args)),
+    );
+
+    registerTenantTool(
+      server,
+      principal,
+      "inbox_test_agents_set",
+      {
+        description:
+          "Replace the additional test agents available on an inbox. The primary must be in test mode and remains the only Chatwoot-connected bot. Previews current vs new and applies NOTHING unless dry_run is false.",
+        inputSchema: {
+          inbox_id: z.string(),
+          agent_ids: z.array(z.string()),
+          dry_run: z.boolean().optional(),
+        },
+      },
+      async (
+        args: {
+          inbox_id: string;
+          agent_ids: string[];
+          dry_run?: boolean;
+        },
+        eff,
+      ) => writeContent(await inboxTestAgentsSet(eff, args)),
     );
 
     registerTenantTool(
