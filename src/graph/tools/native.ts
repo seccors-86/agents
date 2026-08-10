@@ -852,10 +852,13 @@ function emergencyConsultationAudiosTool(ctx: ToolCtx) {
   return tool(
     async () => {
       const dir = process.env.EMERGENCY_CONSULTATION_AUDIO_DIR?.trim();
-      if (!dir) return "Audio sequence is not configured. Do not claim it was sent.";
+      if (!dir)
+        return "Audio sequence is not configured. Do not claim it was sent.";
       const names = ["SEQ 01.mpeg", "SEQ 02.mpeg", "SEQ 03.mpeg"];
       const files = names.map((name) => Bun.file(`${dir}/${name}`));
-      if (!(await Promise.all(files.map((file) => file.exists()))).every(Boolean)) {
+      if (
+        !(await Promise.all(files.map((file) => file.exists()))).every(Boolean)
+      ) {
         return "One or more approved audio files are unavailable. Do not claim they were sent.";
       }
       await ctx.client.sendMessage(
