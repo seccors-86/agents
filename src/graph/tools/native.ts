@@ -844,6 +844,43 @@ function skipReplyTool(_ctx: ToolCtx) {
   );
 }
 
+// LactaSoul's approved, pre-recorded explanation of the postpartum emergency consultation. The
+// files are mounted by the tenant stack; keeping the binary media outside the image lets operators
+// replace an approved recording without rebuilding the application. The tool itself sends the
+// introduction first, then the three voice notes in their required order.
+function emergencyConsultationAudiosTool(ctx: ToolCtx) {
+  return tool(
+    async () => {
+      const dir = process.env.EMERGENCY_CONSULTATION_AUDIO_DIR?.trim();
+      if (!dir) return "Audio sequence is not configured. Do not claim it was sent.";
+      const names = ["SEQ 01.mpeg", "SEQ 02.mpeg", "SEQ 03.mpeg"];
+      const files = names.map((name) => Bun.file(`${dir}/${name}`));
+      if (!(await Promise.all(files.map((file) => file.exists()))).every(Boolean)) {
+        return "One or more approved audio files are unavailable. Do not claim they were sent.";
+      }
+      await ctx.client.sendMessage(
+        ctx.conversationId,
+        "Vou te enviar três áudios importantes da Camila. Ela explica com carinho como funciona esse cuidado e o que você pode esperar da consulta 💛",
+      );
+      for (let index = 0; index < files.length; index += 1) {
+        await ctx.client.sendAudioMessage(
+          ctx.conversationId,
+          await files[index].arrayBuffer(),
+          `consultoria-emergencial-${index + 1}.mp3`,
+          "audio/mpeg",
+        );
+      }
+      return "The three approved Camila audio messages were sent in order. Do not repeat their content or send them again unless the customer explicitly asks. Continue with one short contextual question.";
+    },
+    {
+      name: "send_emergency_consultation_audios",
+      description:
+        "Send Camila's three approved WhatsApp voice notes explaining LactaSoul's postpartum Emergency Consultation. Use only after confirming the baby has already been born, understanding the current difficulty, and concluding that this consultation is a suitable option. Call it once per conversation, before presenting the investment. Do not use for pregnant customers, generic questions, or when the customer has already received the sequence. The tool itself sends the introductory text and all three audios; do not announce them separately.",
+      schema: z.object({}),
+    },
+  );
+}
+
 // Utility tool: exact arithmetic without a model round-trip. Context-free, so it is also exposed
 // in the playground (where there is no conversation to act on).
 function calculatorTool(_ctx: ToolCtx) {
@@ -916,6 +953,7 @@ export function buildNativeTools(
     setVoicePreferenceTool(ctx),
     reactToMessageTool(ctx),
     skipReplyTool(ctx),
+    emergencyConsultationAudiosTool(ctx),
     calculatorTool(ctx),
     getCurrentTimeTool(ctx),
   ];

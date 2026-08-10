@@ -14,6 +14,7 @@ export const NATIVE_TOOL_NAMES = [
   "set_voice_preference",
   "react_to_message",
   "skip_reply",
+  "send_emergency_consultation_audios",
   "calculator",
   "get_current_time",
 ] as const;
@@ -36,6 +37,7 @@ export const NATIVE_TOOL_CATEGORY: Record<NativeToolName, NativeToolCategory> =
     set_voice_preference: "conversation",
     react_to_message: "conversation",
     skip_reply: "conversation",
+    send_emergency_consultation_audios: "conversation",
     calculator: "utility",
     get_current_time: "utility",
   };
@@ -70,6 +72,7 @@ export const NATIVE_TOOL_RISK: Record<NativeToolName, RiskTier> = {
   set_voice_preference: "low",
   react_to_message: "low",
   skip_reply: "low",
+  send_emergency_consultation_audios: "low",
   calculator: "low",
   get_current_time: "low",
 };
