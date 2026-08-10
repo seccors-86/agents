@@ -861,14 +861,10 @@ function emergencyConsultationAudiosTool(ctx: ToolCtx) {
       ) {
         return "One or more approved audio files are unavailable. Do not claim they were sent.";
       }
-      await ctx.client.sendMessage(
-        ctx.conversationId,
-        "Vou te enviar três áudios importantes da Camila. Ela explica com carinho como funciona esse cuidado e o que você pode esperar da consulta 💛",
-      );
-      for (let index = 0; index < files.length; index += 1) {
+      for (const [index, file] of files.entries()) {
         await ctx.client.sendAudioMessage(
           ctx.conversationId,
-          await files[index].arrayBuffer(),
+          await file.arrayBuffer(),
           `consultoria-emergencial-${index + 1}.mp3`,
           "audio/mpeg",
         );
@@ -878,7 +874,7 @@ function emergencyConsultationAudiosTool(ctx: ToolCtx) {
     {
       name: "send_emergency_consultation_audios",
       description:
-        "Send Camila's three approved WhatsApp voice notes explaining LactaSoul's postpartum Emergency Consultation. Use only after confirming the baby has already been born, understanding the current difficulty, and concluding that this consultation is a suitable option. Call it once per conversation, before presenting the investment. Do not use for pregnant customers, generic questions, or when the customer has already received the sequence. The tool itself sends the introductory text and all three audios; do not announce them separately.",
+        "Send Camila's three approved WhatsApp voice notes explaining LactaSoul's postpartum Emergency Consultation. Use only after confirming the baby has already been born, recognizing a current breastfeeding difficulty, asking permission to send Camila's audios, and receiving a clear acceptance such as 'sim', 'pode', 'ok' or equivalent. Call it immediately after that acceptance and only once per conversation, before explaining the consultation or presenting the investment. Do not use for pregnant customers, generic questions, refusal, preference for text, or when the customer has already received the sequence. This tool sends only the three audios because the permission request has already introduced them; do not send another announcement.",
       schema: z.object({}),
     },
   );
