@@ -869,12 +869,16 @@ function emergencyConsultationAudiosTool(ctx: ToolCtx) {
           "audio/mpeg",
         );
       }
-      return "The three approved Camila audio messages were sent in order. Do not repeat their content or send them again unless the customer explicitly asks. Continue with one short contextual question.";
+      await ctx.client.sendMessage(
+        ctx.conversationId,
+        "Depois de ouvir os áudios, me conta se ficou alguma dúvida sobre como funciona a Consulta Emergencial, tá bem? 💛",
+      );
+      return "The three approved Camila audio messages and the contextual follow-up were sent in order. Produce no additional customer-facing text this turn. Do not repeat their content or send them again unless the customer explicitly asks.";
     },
     {
       name: "send_emergency_consultation_audios",
       description:
-        "Send Camila's three approved WhatsApp voice notes explaining LactaSoul's postpartum Emergency Consultation. Use only after confirming the baby has already been born, recognizing a current breastfeeding difficulty, asking permission to send Camila's audios, and receiving a clear acceptance such as 'sim', 'pode', 'ok' or equivalent. Call it immediately after that acceptance and only once per conversation, before explaining the consultation or presenting the investment. Do not use for pregnant customers, generic questions, refusal, preference for text, or when the customer has already received the sequence. This tool sends only the three audios because the permission request has already introduced them; do not send another announcement.",
+        "Send Camila's three approved WhatsApp voice notes explaining LactaSoul's postpartum Emergency Consultation. Use only after confirming the baby has already been born, recognizing a current breastfeeding difficulty, asking permission to send Camila's audios, and receiving a clear acceptance such as 'sim', 'pode', 'ok' or equivalent. Call it immediately after that acceptance and only once per conversation, before explaining the consultation or presenting the investment. Do not use for pregnant customers, generic questions, refusal, preference for text, or when the customer has already received the sequence. This tool sends the three audios and then a contextual follow-up beginning with 'Depois de ouvir os áudios'. Do not send another announcement or any additional response after calling it.",
       schema: z.object({}),
     },
   );
