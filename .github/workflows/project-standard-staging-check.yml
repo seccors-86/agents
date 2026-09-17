@@ -1,0 +1,56 @@
+name: Project Standard Staging Check
+
+on:
+  push:
+    branches: [project-standard-v1]
+    paths:
+      - 'project-standard-template/**'
+      - '.github/workflows/project-standard-staging-check.yml'
+  pull_request:
+    paths:
+      - 'project-standard-template/**'
+      - '.github/workflows/project-standard-staging-check.yml'
+
+jobs:
+  validate-template:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: project-standard-template
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile zero-dependency scripts
+        run: python -m py_compile scripts/doctor.py scripts/verify.py scripts/usage.py
+
+      - name: Parse machine config
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          json.loads(Path('.project/config.json').read_text(encoding='utf-8'))
+          print('config: PASS')
+          PY
+
+      - name: Run doctor
+        run: python scripts/doctor.py
+
+      - name: Generate empty usage report
+        run: python scripts/usage.py report
+
+      - name: Verify template does not fake a PASS without configured gates
+        shell: bash
+        run: |
+          set +e
+          python scripts/verify.py
+          status=$?
+          set -e
+          if [ "$status" -ne 3 ]; then
+            echo "Expected verify.py to return 3 (NO GATES EXECUTED), got $status"
+            exit 1
+          fi
+          echo "verify empty-template behavior: PASS"
