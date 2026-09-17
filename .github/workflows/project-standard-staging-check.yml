@@ -54,3 +54,51 @@ jobs:
             exit 1
           fi
           echo "verify empty-template behavior: PASS"
+
+      - name: Test Claude Code cache and cost normalization
+        shell: bash
+        run: |
+          cat > .project/usage/claude-result.json <<'JSON'
+          {
+            "session_id": "claude-test-session",
+            "model": "claude-test",
+            "total_cost_usd": 0.123,
+            "usage": {
+              "input_tokens": 100,
+              "cache_creation_input_tokens": 20,
+              "cache_read_input_tokens": 30,
+              "output_tokens": 40
+            }
+          }
+          JSON
+          python scripts/usage.py import-claude-json .project/usage/claude-result.json --billing-mode api
+          python scripts/usage.py report
+          grep -q 'claude-code' .project/usage/USAGE.md
+          grep -q 'Cache read: 30' .project/usage/USAGE.md
+          grep -q 'Cache write/creation: 20' .project/usage/USAGE.md
+          grep -q '\$0.1230' .project/usage/USAGE.md
+
+      - name: Test Codex project filtering and token normalization
+        shell: bash
+        run: |
+          mkdir -p .tmp-codex/sessions/2026/09/17
+          root="$(pwd)"
+          cat > .tmp-codex/sessions/2026/09/17/rollout-project.jsonl <<JSONL
+          {"timestamp":"2026-09-17T12:00:00Z","type":"session_meta","payload":{"id":"codex-project-session","cwd":"$root","model_provider":"openai"}}
+          {"timestamp":"2026-09-17T12:00:01Z","type":"turn_context","payload":{"cwd":"$root","model":"gpt-test"}}
+          {"timestamp":"2026-09-17T12:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"cache_write_input_tokens":100,"output_tokens":200,"reasoning_output_tokens":50,"total_tokens":1200}}}}
+          JSONL
+          cat > .tmp-codex/sessions/2026/09/17/rollout-other.jsonl <<'JSONL'
+          {"timestamp":"2026-09-17T12:00:00Z","type":"session_meta","payload":{"id":"codex-other-session","cwd":"/tmp/not-this-project","model_provider":"openai"}}
+          {"timestamp":"2026-09-17T12:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":99999,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":99999,"reasoning_output_tokens":0,"total_tokens":199998}}}}
+          JSONL
+          python scripts/usage.py import-codex --codex-home .tmp-codex --billing-mode subscription | tee /tmp/codex-import.txt
+          grep -q '1 project session(s)' /tmp/codex-import.txt
+          python scripts/usage.py report
+          grep -q '| codex | 1,200 |' .project/usage/USAGE.md
+          grep -q '| openai/gpt-test | 1,200 |' .project/usage/USAGE.md
+
+      - name: Confirm unknown costs are not rendered as zero
+        shell: bash
+        run: |
+          grep -q '| codex | 1,200 | — | — | — |' .project/usage/USAGE.md
