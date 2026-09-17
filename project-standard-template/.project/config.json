@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "standard": {
+    "name": "project-development-standard",
+    "version": "0.1.0"
+  },
+  "project": {
+    "name": "<nome-do-projeto>",
+    "stage": "development"
+  },
+  "workflow": {
+    "documentation_mode": "incremental",
+    "specs": "on-demand",
+    "adr": "on-significant-decision",
+    "operational_tracker": "simple"
+  },
+  "validation": {
+    "stop_on_failure": true,
+    "commands": [
+      {
+        "name": "tests",
+        "command": "<substituir pelo comando real de testes>",
+        "required": false
+      },
+      {
+        "name": "typecheck",
+        "command": "<substituir pelo comando real de typecheck>",
+        "required": false
+      },
+      {
+        "name": "build",
+        "command": "<substituir pelo comando real de build>",
+        "required": false
+      }
+    ]
+  },
+  "usage": {
+    "enabled": true,
+    "currency": "USD",
+    "store_prompts": false,
+    "store_responses": false,
+    "events_dir": ".project/usage/events",
+    "report_path": ".project/usage/USAGE.md",
+    "pricing_catalog": ".project/usage/pricing.json"
+  }
+}
