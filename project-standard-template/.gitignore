@@ -1,0 +1,30 @@
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node/common build output
+node_modules/
+dist/
+build/
+.next/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+
+# AI usage: keep normalized metrics, ignore raw/transient exports
+.project/usage/snapshots/*.raw.json
+.project/usage/*-result.json
+.project/usage/tmp/
+
+# Harness-local caches/session stores should not become project memory
+.opencode/cache/
+.codex/
+.claude/cache/
