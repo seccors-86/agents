@@ -33,7 +33,7 @@ Repositório Git
 
 1. Use este diretório como template do novo repositório.
 2. Preencha `PROJECT.md` apenas com fatos conhecidos.
-3. Ajuste `.project/config.yaml` aos comandos reais do projeto.
+3. Ajuste `.project/config.json` aos comandos reais do projeto.
 4. Inicie seu harness na raiz do repositório.
 5. Peça: **"Inicialize este projeto seguindo a skill project-workflow."**
 
@@ -56,7 +56,7 @@ Atualize um artefato somente quando a mudança alterar conhecimento que um agent
 - decisão arquitetural importante: ADR;
 - feature complexa: spec;
 - foco/blocker atual: `.project/state.md`;
-- mudança em comandos de validação: `.project/config.yaml` e, se necessário, `AGENTS.md`.
+- mudança em comandos de validação: `.project/config.json` e, se necessário, `AGENTS.md`.
 
 ## Telemetria de IA
 
@@ -65,26 +65,29 @@ Atualize um artefato somente quando a mudança alterar conhecimento que um agent
 O relatório diferencia:
 
 - **tokens observados**;
-- **custo real medido** quando o provider/harness informa cobrança;
-- **custo equivalente de API** quando o uso veio de assinatura e não há cobrança por chamada;
+- **custo reportado pelo harness**;
+- **custo real atribuído** quando houver cobrança metered/API identificável;
+- **custo equivalente de API** quando o uso vier de assinatura;
 - **estimativas** claramente marcadas como estimativas.
 
 Execute:
 
 ```bash
+python scripts/usage.py import-opencode --billing-mode subscription
 python scripts/usage.py report
-python scripts/usage.py import-opencode
 ```
 
-O OpenCode pode fornecer estatísticas por projeto; outros harnesses podem alimentar o mesmo formato por adaptadores ou pelo comando `add`.
+O OpenCode pode fornecer estatísticas cumulativas por projeto; outros harnesses alimentam o mesmo formato por adaptadores ou pelo comando `add`.
 
 ## Gates
 
-`python scripts/verify.py` executa os comandos configurados em `.project/config.yaml`.
+`python scripts/verify.py` executa os comandos configurados em `.project/config.json`.
 
 O princípio é simples:
 
 > A IA pode decidir como implementar; software determinístico decide se os gates passaram.
+
+`verify.py` não retorna PASS se nenhum gate real estiver configurado.
 
 ## O que NÃO é obrigatório
 
