@@ -40,7 +40,6 @@
     "store_prompts": false,
     "store_responses": false,
     "events_dir": ".project/usage/events",
-    "report_path": ".project/usage/USAGE.md",
-    "pricing_catalog": ".project/usage/pricing.json"
+    "report_path": ".project/usage/USAGE.md"
   }
 }
